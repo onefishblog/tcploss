@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# -----------------------------------------------------------------------------
-# 交互式 TCP 丢包测试脚本
-# 兼容：CentOS/Debian/Ubuntu（自动安装缺失依赖，需要 root 权限并会提示 Y/n）
-# 功能：交互输入握手次数、超时时间、目标 IP、目标端口；也可直接回车使用默认值
-# -----------------------------------------------------------------------------
+# --------------------------------------------------------
+# TCP 丢包测试脚本（支持 IPv4 + IPv6）
+# 兼容：CentOS / Debian / Ubuntu
+# 依赖：nc（netcat）、awk
+# --------------------------------------------------------
 
-# 映射命令到包名
+# 检查并安装依赖（自动确认）
 declare -A PKG_MAP=(
-  ["timeout"]="coreutils"
-  ["awk"]="gawk"
+  [nc]="netcat"
+  [awk]="gawk"
 )
 
-# 检查并安装缺失组件
 missing=()
 for cmd in "${!PKG_MAP[@]}"; do
   if ! command -v "$cmd" &>/dev/null; then
     missing+=("${PKG_MAP[$cmd]}")
   fi
+
 done
 
 if [ ${#missing[@]} -gt 0 ]; then
@@ -29,13 +29,10 @@ if [ ${#missing[@]} -gt 0 ]; then
   fi
 
   if command -v apt-get &>/dev/null; then
-    echo "更新 apt 索引…"
     apt-get update
-    echo "安装 ${missing[*]}（输入 Y 确认）…"
-    apt-get install "${missing[@]}"
+    apt-get install -y "${missing[@]}"
   elif command -v yum &>/dev/null; then
-    echo "安装 ${missing[*]}（输入 Y 确认）…"
-    yum install "${missing[@]}"
+    yum install -y "${missing[@]}"
   else
     echo "未识别包管理器，请手动安装：${missing[*]}" >&2
     exit 1
@@ -46,46 +43,47 @@ fi
 # 默认值
 DEFAULT_COUNT=500
 DEFAULT_TIMEOUT=1
-DEFAULT_REMOTE_IP="127.0.0.1"
-DEFAULT_REMOTE_PORT=65535
+DEFAULT_REMOTE_IP="::1"
+DEFAULT_REMOTE_PORT=80
 
-# 交互式输入
-read -rp "请输入握手尝试次数 [默认 ${DEFAULT_COUNT}]: " input
+read -rp "请输入握手尝试次数 [默认 $DEFAULT_COUNT]: " input
 COUNT="${input:-$DEFAULT_COUNT}"
 
-read -rp "请输入每次握手超时时间（秒） [默认 ${DEFAULT_TIMEOUT}]: " input
+read -rp "请输入每次握手超时时间（秒） [默认 $DEFAULT_TIMEOUT]: " input
 TIMEOUT="${input:-$DEFAULT_TIMEOUT}"
 
-read -rp "请输入目标 IP [默认 ${DEFAULT_REMOTE_IP}]: " input
+read -rp "请输入目标 IP（支持 IPv4 或 IPv6） [默认 $DEFAULT_REMOTE_IP]: " input
 REMOTE_IP="${input:-$DEFAULT_REMOTE_IP}"
 
-read -rp "请输入目标端口 [默认 ${DEFAULT_REMOTE_PORT}]: " input
+read -rp "请输入目标端口 [默认 $DEFAULT_REMOTE_PORT]: " input
 REMOTE_PORT="${input:-$DEFAULT_REMOTE_PORT}"
 
-echo
-echo "配置如下："
-echo "  次数：$COUNT"
-echo "  超时：${TIMEOUT}s"
-echo "  目标：$REMOTE_IP:$REMOTE_PORT"
-echo
+# 判断是否 IPv6
+if [[ "$REMOTE_IP" =~ : ]]; then
+  NC_OPT="-6"
+else
+  NC_OPT="-4"
+fi
 
-# 测试循环
 succ=0
 fail=0
-echo "开始进行 TCP 握手测试…"
+
+echo "\n开始测试 $REMOTE_IP:$REMOTE_PORT，总次数: $COUNT，超时: ${TIMEOUT}s"
+
 for ((i=1; i<=COUNT; i++)); do
-  if timeout "$TIMEOUT" bash -c "exec 3<>/dev/tcp/${REMOTE_IP}/${REMOTE_PORT}" &>/dev/null; then
+  if nc $NC_OPT -z -w "$TIMEOUT" "$REMOTE_IP" "$REMOTE_PORT" &>/dev/null; then
     ((succ++))
-    exec 3>&- 3<&- || true
   else
     ((fail++))
   fi
+  # 可选进度条
+  printf "\r已完成: %d/%d" "$i" "$COUNT"
+  sleep 0.01
 done
 
 # 输出结果
-echo
-echo "测试完成，共尝试 ${COUNT} 次"
-echo "➜ 成功握手（收到 RST 或完成三次握手）: ${succ} 次"
-echo "➜ 握手失败（超时或不可达）         : ${fail} 次"
-pct=$(awk -v f=$fail -v s=$succ 'BEGIN{printf \"%.2f\", f/(f+s)*100}')
+echo -e "\n\n测试完成"
+echo "➜ 成功连接: $succ 次"
+echo "➜ 失败连接: $fail 次"
+pct=$(awk -v f=$fail -v s=$succ 'BEGIN{printf "%.2f", f/(f+s)*100}')
 echo "➜ 粗略 TCP 丢包率 ≈ ${pct}%"
