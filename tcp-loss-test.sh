@@ -2,11 +2,9 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# TCP 握手丢包测试脚本
-# 兼容：CentOS/Debian/Ubuntu
-# 功能：缺少 timeout 或 awk 时自动安装（需 root 权限，安装时会提示 Y/n）
-# 用法：chmod +x tcp-loss-test.sh
-#      ./tcp-loss-test.sh [-c 次数] [-t 超时时间(秒)] <目标IP> <目标端口>
+# 交互式 TCP 丢包测试脚本
+# 兼容：CentOS/Debian/Ubuntu（自动安装缺失依赖，需要 root 权限并会提示 Y/n）
+# 功能：交互输入握手次数、超时时间、目标 IP、目标端口；也可直接回车使用默认值
 # -----------------------------------------------------------------------------
 
 # 映射命令到包名
@@ -16,81 +14,67 @@ declare -A PKG_MAP=(
 )
 
 # 检查并安装缺失组件
-missing_pkgs=()
+missing=()
 for cmd in "${!PKG_MAP[@]}"; do
   if ! command -v "$cmd" &>/dev/null; then
-    missing_pkgs+=("${PKG_MAP[$cmd]}")
+    missing+=("${PKG_MAP[$cmd]}")
   fi
 done
 
-if [ ${#missing_pkgs[@]} -gt 0 ]; then
-  echo "检测到缺少组件：${missing_pkgs[*]}"
-  # 必须 root 权限才能安装
+if [ ${#missing[@]} -gt 0 ]; then
+  echo "检测到缺少组件：${missing[*]}"
   if [ "$EUID" -ne 0 ]; then
-    echo "请使用 root 权限运行脚本，以安装缺少的组件。" >&2
+    echo "请用 root 或 sudo 运行以安装依赖。" >&2
     exit 1
   fi
 
-  # 选择包管理器
-  if   command -v apt-get &>/dev/null; then
-    pkg_mgr="apt-get"
-    update_cmd="apt-get update"
-    install_cmd="apt-get install"
-  elif command -v yum     &>/dev/null; then
-    pkg_mgr="yum"
-    update_cmd=""               # yum install 会自动 refresh
-    install_cmd="yum install"
+  if command -v apt-get &>/dev/null; then
+    echo "更新 apt 索引…"
+    apt-get update
+    echo "安装 ${missing[*]}（输入 Y 确认）…"
+    apt-get install "${missing[@]}"
+  elif command -v yum &>/dev/null; then
+    echo "安装 ${missing[*]}（输入 Y 确认）…"
+    yum install "${missing[@]}"
   else
-    echo "未检测到 apt-get 或 yum，请手动安装：${missing_pkgs[*]}" >&2
+    echo "未识别包管理器，请手动安装：${missing[*]}" >&2
     exit 1
   fi
-
-  # 更新索引（如果需要）
-  if [ -n "$update_cmd" ]; then
-    echo "正在更新包索引……"
-    $update_cmd
-  fi
-
-  # 安装缺失包（会提示 Y/n）
-  echo "将安装：${missing_pkgs[*]}"
-  $install_cmd "${missing_pkgs[@]}"
-  echo "组件安装完成。"
+  echo "依赖安装完成。"
 fi
 
-# 默认参数
-COUNT=500
-TIMEOUT=1
+# 默认值
+DEFAULT_COUNT=500
+DEFAULT_TIMEOUT=1
+DEFAULT_REMOTE_IP="127.0.0.1"
+DEFAULT_REMOTE_PORT=65535
 
-# 参数解析
-usage() {
-  cat <<EOF >&2
-用法: $0 [-c 次数] [-t 超时时间(秒)] <目标IP> <目标端口>
+# 交互式输入
+read -rp "请输入握手尝试次数 [默认 ${DEFAULT_COUNT}]: " input
+COUNT="${input:-$DEFAULT_COUNT}"
 
-  -c 次数        握手尝试次数，默认 $COUNT
-  -t 超时时间    每次握手超时时间（秒），默认 $TIMEOUT
-EOF
-  exit 1
-}
+read -rp "请输入每次握手超时时间（秒） [默认 ${DEFAULT_TIMEOUT}]: " input
+TIMEOUT="${input:-$DEFAULT_TIMEOUT}"
 
-while getopts ":c:t:" opt; do
-  case $opt in
-    c) COUNT="$OPTARG" ;;
-    t) TIMEOUT="$OPTARG" ;;
-    *) usage ;;
-  esac
-done
-shift $((OPTIND-1))
+read -rp "请输入目标 IP [默认 ${DEFAULT_REMOTE_IP}]: " input
+REMOTE_IP="${input:-$DEFAULT_REMOTE_IP}"
 
-[ $# -eq 2 ] || usage
-REMOTE_IP="$1"
-REMOTE_PORT="$2"
+read -rp "请输入目标端口 [默认 ${DEFAULT_REMOTE_PORT}]: " input
+REMOTE_PORT="${input:-$DEFAULT_REMOTE_PORT}"
 
+echo
+echo "配置如下："
+echo "  次数：$COUNT"
+echo "  超时：${TIMEOUT}s"
+echo "  目标：$REMOTE_IP:$REMOTE_PORT"
+echo
+
+# 测试循环
 succ=0
 fail=0
-
-echo "开始在 $REMOTE_IP:$REMOTE_PORT 上进行 $COUNT 次 TCP 握手测试 (超时 ${TIMEOUT}s)…"
+echo "开始进行 TCP 握手测试…"
 for ((i=1; i<=COUNT; i++)); do
-  if timeout "${TIMEOUT}" bash -c "exec 3<>/dev/tcp/${REMOTE_IP}/${REMOTE_PORT}" &>/dev/null; then
+  if timeout "$TIMEOUT" bash -c "exec 3<>/dev/tcp/${REMOTE_IP}/${REMOTE_PORT}" &>/dev/null; then
     ((succ++))
     exec 3>&- 3<&- || true
   else
@@ -102,6 +86,6 @@ done
 echo
 echo "测试完成，共尝试 ${COUNT} 次"
 echo "➜ 成功握手（收到 RST 或完成三次握手）: ${succ} 次"
-echo "➜ 握手失败（超时或网络不可达）         : ${fail} 次"
-pct=$(awk -v f=$fail -v s=$succ 'BEGIN{printf "%.2f", f/(f+s)*100}')
+echo "➜ 握手失败（超时或不可达）         : ${fail} 次"
+pct=$(awk -v f=$fail -v s=$succ 'BEGIN{printf \"%.2f\", f/(f+s)*100}')
 echo "➜ 粗略 TCP 丢包率 ≈ ${pct}%"
