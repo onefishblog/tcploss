@@ -4,16 +4,16 @@ set -euo pipefail
 # --------------------------------------------------------
 # TCP 丢包测试脚本（支持 IPv4 + IPv6）
 # 兼容：CentOS / Debian / Ubuntu
-# 依赖：nc（netcat）、awk
+# 依赖：bash timeout nc awk
 # --------------------------------------------------------
 
-# 映射命令到安装包名
+# 检查并自动安装缺失组件（需 root/SUDO）
 declare -A PKG_MAP=(
   [nc]="netcat"
+  [timeout]="coreutils"
   [awk]="gawk"
 )
 
-# 检查并自动安装缺失组件（需 root/SUDO）
 missing=()
 for cmd in "${!PKG_MAP[@]}"; do
   if ! command -v "$cmd" &>/dev/null; then
@@ -55,14 +55,13 @@ REMOTE_IP="${input:-$DEFAULT_REMOTE_IP}"
 read -rp "请输入目标端口 [默认 $DEFAULT_REMOTE_PORT]: " input
 REMOTE_PORT="${input:-$DEFAULT_REMOTE_PORT}"
 
-# 测试开始
+# 开始测试
 echo -e "\n开始测试 $REMOTE_IP:$REMOTE_PORT，总次数: $COUNT，超时: ${TIMEOUT}s"
 
 succ=0
 fail=0
 for ((i=1; i<=COUNT; i++)); do
-  # 使用 nc 自动识别地址族，-z 仅扫描端口，-w 设置超时
-  if nc -z -w "$TIMEOUT" "$REMOTE_IP" "$REMOTE_PORT" &>/dev/null; then
+  if timeout "$TIMEOUT" nc -z "$REMOTE_IP" "$REMOTE_PORT" &>/dev/null; then
     ((succ++))
   else
     ((fail++))
@@ -74,5 +73,5 @@ done
 echo -e "\n\n测试完成"
 echo "➜ 成功连接: $succ 次"
 echo "➜ 失败连接: $fail 次"
-pct=$(awk -v f=$fail -v s=$succ 'BEGIN{printf "%.2f", f/(f+s)*100}')
+pct=$(awk -v f=$fail -v s=$succ 'BEGIN{printf \"%.2f\", f/(f+s)*100}')
 echo "➜ 粗略 TCP 丢包率 ≈ ${pct}%"
