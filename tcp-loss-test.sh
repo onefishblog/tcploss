@@ -20,7 +20,6 @@ for cmd in "${!PKG_MAP[@]}"; do
   if ! command -v "$cmd" &>/dev/null; then
     missing+=("${PKG_MAP[$cmd]}")
   fi
-
 done
 
 if (( ${#missing[@]} )); then
@@ -58,36 +57,36 @@ read -rp "请输入目标端口 [默认 $DEFAULT_REMOTE_PORT]: " input
 REMOTE_PORT="${input:-$DEFAULT_REMOTE_PORT}"
 
 # 检测 nc 是否支持地址族标志
-SUPPORT_V6=false; SUPPORT_V4=false
+SUPPORT_V6=false
+SUPPORT_V4=false
 if nc -h 2>&1 | grep -q -- ' -6'; then SUPPORT_V6=true; fi
 if nc -h 2>&1 | grep -q -- ' -4'; then SUPPORT_V4=true; fi
 
 # 根据 IP 自动选择 IPv4/IPv6
 if [[ "$REMOTE_IP" == *:* ]]; then
   # IPv6 地址
-  if \$SUPPORT_V6; then
+  if [[ "$SUPPORT_V6" == "true" ]]; then
     AF_FLAG="-6"
   else
     AF_FLAG=""
   fi
 else
   # IPv4 地址
-  if \$SUPPORT_V4; then
+  if [[ "$SUPPORT_V4" == "true" ]]; then
     AF_FLAG="-4"
   else
     AF_FLAG=""
   fi
 fi
-ADDR="$REMOTE_IP"
 
-# 统计变量
+# 开始测试
 succ=0
 fail=0
 
 echo -e "\n开始测试 $REMOTE_IP:$REMOTE_PORT，总次数: $COUNT，超时: ${TIMEOUT}s"
 
 for ((i=1; i<=COUNT; i++)); do
-  if timeout "$TIMEOUT" nc $AF_FLAG -z "$ADDR" "$REMOTE_PORT" &>/dev/null; then
+  if timeout "$TIMEOUT" nc $AF_FLAG -z "$REMOTE_IP" "$REMOTE_PORT" &>/dev/null; then
     ((succ++))
   else
     ((fail++))
