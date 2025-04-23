@@ -7,13 +7,8 @@ set -euo pipefail
 # 依赖：bash timeout nc awk
 # --------------------------------------------------------
 
-# 检查并自动安装缺失组件（需 root/SUDO）
-declare -A PKG_MAP=(
-  [nc]="netcat"
-  [timeout]="coreutils"
-  [awk]="gawk"
-)
-
+# 检查并自动安装依赖（需 root/SUDO）
+declare -A PKG_MAP=( [nc]="netcat" [timeout]="coreutils" [awk]="gawk" )
 missing=()
 for cmd in "${!PKG_MAP[@]}"; do
   if ! command -v "$cmd" &>/dev/null; then
@@ -23,19 +18,10 @@ done
 
 if (( ${#missing[@]} )); then
   echo "检测到缺少组件：${missing[*]}"
-  if [[ "$EUID" -ne 0 ]]; then
-    echo "请使用 root 或 sudo 运行以安装依赖。" >&2
-    exit 1
-  fi
-  if command -v apt-get &>/dev/null; then
-    apt-get update
-    apt-get install -y "${missing[@]}"
-  elif command -v yum &>/dev/null; then
-    yum install -y "${missing[@]}"
-  else
-    echo "未识别包管理器，请手动安装：${missing[*]}" >&2
-    exit 1
-  fi
+  if [[ "$EUID" -ne 0 ]]; then echo "请使用 root 或 sudo 运行以安装依赖。" >&2; exit 1; fi
+  if command -v apt-get &>/dev/null; then apt-get update; apt-get install -y "${missing[@]}"; 
+  elif command -v yum &>/dev/null; then yum install -y "${missing[@]}"; 
+  else echo "未识别包管理器，请手动安装：${missing[*]}" >&2; exit 1; fi
   echo "依赖安装完成。"
 fi
 
@@ -55,23 +41,27 @@ REMOTE_IP="${input:-$DEFAULT_REMOTE_IP}"
 read -rp "请输入目标端口 [默认 $DEFAULT_REMOTE_PORT]: " input
 REMOTE_PORT="${input:-$DEFAULT_REMOTE_PORT}"
 
-# 开始测试
-echo -e "\n开始测试 $REMOTE_IP:$REMOTE_PORT，总次数: $COUNT，超时: ${TIMEOUT}s"
+# 根据 IP 自动选择 IPv4/IPv6
+if [[ "$REMOTE_IP" == *:* ]]; then AF_FLAG="-6"; else AF_FLAG="-4"; fi
+
+echo
+echo "开始测试 $REMOTE_IP:$REMOTE_PORT，总次数: $COUNT，超时: ${TIMEOUT}s"
+echo "--------------------------------------------------------"
 
 succ=0
 fail=0
 for ((i=1; i<=COUNT; i++)); do
-  if timeout "$TIMEOUT" nc -z "$REMOTE_IP" "$REMOTE_PORT" &>/dev/null; then
+  if timeout "$TIMEOUT" nc $AF_FLAG -z -w "$TIMEOUT" "$REMOTE_IP" "$REMOTE_PORT" &>/dev/null; then
     ((succ++))
   else
     ((fail++))
   fi
-  printf "\r已完成: %d/%d" "$i" "$COUNT"
+  echo "已完成: $i/$COUNT (成功:$succ 失败:$fail)"
 done
 
-# 输出结果
-echo -e "\n\n测试完成"
-echo "➜ 成功连接: $succ 次"
-echo "➜ 失败连接: $fail 次"
-pct=$(awk -v f=$fail -v s=$succ 'BEGIN{printf \"%.2f\", f/(f+s)*100}')
-echo "➜ 粗略 TCP 丢包率 ≈ ${pct}%"
+echo
+ echo "测试完成"
+ echo "➜ 成功连接: $succ 次"
+ echo "➜ 失败连接: $fail 次"
+ pct=$(awk -v f=$fail -v s=$succ 'BEGIN{printf "%.2f", f/(f+s)*100}')
+ echo "➜ 粗略 TCP 丢包率 ≈ ${pct}%"
