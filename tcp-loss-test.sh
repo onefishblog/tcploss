@@ -4,13 +4,12 @@ set -euo pipefail
 # --------------------------------------------------------
 # TCP 丢包测试脚本（支持 IPv4 + IPv6）
 # 兼容：CentOS / Debian / Ubuntu
-# 依赖：bash timeout nc awk
+# 依赖：nc（netcat）、awk
 # --------------------------------------------------------
 
 # 映射命令到安装包名
 declare -A PKG_MAP=(
   [nc]="netcat"
-  [timeout]="coreutils"
   [awk]="gawk"
 )
 
@@ -56,37 +55,14 @@ REMOTE_IP="${input:-$DEFAULT_REMOTE_IP}"
 read -rp "请输入目标端口 [默认 $DEFAULT_REMOTE_PORT]: " input
 REMOTE_PORT="${input:-$DEFAULT_REMOTE_PORT}"
 
-# 检测 nc 是否支持地址族标志
-SUPPORT_V6=false
-SUPPORT_V4=false
-if nc -h 2>&1 | grep -q -- ' -6'; then SUPPORT_V6=true; fi
-if nc -h 2>&1 | grep -q -- ' -4'; then SUPPORT_V4=true; fi
-
-# 根据 IP 自动选择 IPv4/IPv6
-if [[ "$REMOTE_IP" == *:* ]]; then
-  # IPv6 地址
-  if [[ "$SUPPORT_V6" == "true" ]]; then
-    AF_FLAG="-6"
-  else
-    AF_FLAG=""
-  fi
-else
-  # IPv4 地址
-  if [[ "$SUPPORT_V4" == "true" ]]; then
-    AF_FLAG="-4"
-  else
-    AF_FLAG=""
-  fi
-fi
-
-# 开始测试
-succ=0
-fail=0
-
+# 测试开始
 echo -e "\n开始测试 $REMOTE_IP:$REMOTE_PORT，总次数: $COUNT，超时: ${TIMEOUT}s"
 
+succ=0
+fail=0
 for ((i=1; i<=COUNT; i++)); do
-  if timeout "$TIMEOUT" nc $AF_FLAG -z "$REMOTE_IP" "$REMOTE_PORT" &>/dev/null; then
+  # 使用 nc 自动识别地址族，-z 仅扫描端口，-w 设置超时
+  if nc -z -w "$TIMEOUT" "$REMOTE_IP" "$REMOTE_PORT" &>/dev/null; then
     ((succ++))
   else
     ((fail++))
@@ -94,7 +70,7 @@ for ((i=1; i<=COUNT; i++)); do
   printf "\r已完成: %d/%d" "$i" "$COUNT"
 done
 
-# 结果输出
+# 输出结果
 echo -e "\n\n测试完成"
 echo "➜ 成功连接: $succ 次"
 echo "➜ 失败连接: $fail 次"
